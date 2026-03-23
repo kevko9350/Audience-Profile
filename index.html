@@ -1,0 +1,1430 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Audience Intelligence Suite — LOCI</title>
+
+  <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body, #root { height: 100%; overflow: hidden; }
+    body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; background: #060D1A; color: #E8EAF0; }
+    ::-webkit-scrollbar { width: 5px; height: 5px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 99px; }
+    ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.2); }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+    @keyframes glow { 0%,100%{box-shadow:0 0 6px rgba(255,104,85,0.4)} 50%{box-shadow:0 0 14px rgba(255,104,85,0.8)} }
+    input, textarea, button { font-family: inherit; }
+    textarea { resize: vertical; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+<script type="text/babel">
+const { useState, useRef, useEffect, useCallback } = React;
+
+// ── CUSTOM SVG BAR CHART (no external lib needed) ─────────────────────────────
+function HBarChart({ data, valueKey = 'index', labelKey, max = 300, colorFn }) {
+  const ROW = 36, LW = 128, BW = 220, VW = 36;
+  const W = LW + BW + VW, H = data.length * ROW + 8;
+  const refX = LW + (100 / max) * BW;
+  const defaultColor = (d) => {
+    const v = d[valueKey] || 0;
+    return v >= 170 ? T.coral : v >= 130 ? T.coralSoft : v >= 100 ? T.teal : T.muted;
+  };
+  const getColor = colorFn || defaultColor;
+  return (
+    <div style={{ width: '100%', overflowX: 'auto' }}>
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', display: 'block', minWidth: 280 }}>
+        {/* Baseline at 100 */}
+        <line x1={refX} y1={0} x2={refX} y2={H - 10} stroke="rgba(255,255,255,0.18)" strokeDasharray="4 3" strokeWidth={1} />
+        <text x={refX} y={H - 1} textAnchor="middle" fill="rgba(255,255,255,0.25)" fontSize={8} fontFamily="Inter,sans-serif">100</text>
+        {data.map((d, i) => {
+          const y = i * ROW + 4;
+          const val = d[valueKey] || 0;
+          const bw = Math.max((val / max) * BW, 2);
+          return (
+            <g key={i}>
+              <line x1={LW} y1={y + ROW - 4} x2={LW + BW} y2={y + ROW - 4} stroke="rgba(255,255,255,0.04)" strokeWidth={1} />
+              <text x={LW - 8} y={y + 15} textAnchor="end" fill={T.text} fontSize={11} fontFamily="Inter,sans-serif">{d[labelKey]}</text>
+              <rect x={LW} y={y + 3} width={bw} height={18} fill={getColor(d)} rx={3} opacity={0.9} />
+              <text x={LW + bw + 5} y={y + 15} fill={T.muted} fontSize={10} fontFamily="Inter,sans-serif">{val}</text>
+            </g>
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
+
+// ── THEME ─────────────────────────────────────────────────────────────────────
+const T = {
+  bg:        '#060D1A',
+  bgCard:    '#0D1829',
+  bgDeep:    '#08111F',
+  sidebar:   '#080F1E',
+  coral:     '#FF6855',
+  coralSoft: '#FF8870',
+  coralDim:  'rgba(255,104,85,0.12)',
+  coralBdr:  'rgba(255,104,85,0.28)',
+  teal:      '#4ECDC4',
+  tealDim:   'rgba(78,205,196,0.12)',
+  tealBdr:   'rgba(78,205,196,0.28)',
+  gold:      '#F7C59F',
+  goldDim:   'rgba(247,197,159,0.12)',
+  text:      '#E8EAF0',
+  muted:     '#6B7FA0',
+  border:    'rgba(255,255,255,0.07)',
+  borderHi:  'rgba(255,255,255,0.14)',
+};
+
+// ── DATA CONTEXT ──────────────────────────────────────────────────────────────
+const DATA_CONTEXT = `
+Available partner data assets:
+• Experian identity graph: IP, IDFA, CTV, cookie linkage at household level
+• DeepSync demographics: Age (18–65+), gender, ethnicity (White/Black/Hispanic/Asian/Other), HH income ($35K–$250K+), education, occupation, home ownership, political affiliation
+• DeepSync behavioral signals: auto owner, premium shopper, dog/cat owner, new mover, cord-cutter; interest verticals: Gaming, Outdoors, Technology, Finance, Health, Fashion, Cooking, Auto, Travel, Sports, Home Improvement
+• Freewheel CTV impressions: platforms (Roku, Samsung, Amazon Fire TV, Apple TV, LG, Vizio), dayparts (Early Morning/Morning/Daytime/Early Fringe/Prime/Late Night), genres, completion rates
+• Onspot foot traffic: venue visits (auto dealers, home improvement, healthcare, restaurants, retail), dwell time
+• LoopMe digital: page category, conversion events, device type (mobile/tablet/desktop/CTV)
+
+Key DMA markets: 501=New York, 502=Los Angeles, 503=Chicago, 504=Philadelphia, 505=Dallas-Ft.Worth, 506=San Francisco, 507=Boston, 508=Atlanta, 509=Tampa, 510=Cleveland, 511=Detroit, 512=Seattle, 513=Minneapolis, 514=Miami→528, 528=Miami, 535=Atlanta→508, 539=Austin
+
+Southeast DMAs: 504(Phil), 505(Dallas), 508(Atlanta), 509(Tampa), 511(Detroit), 528(Miami)
+Census regions: Northeast(501,504,507), Midwest(503,510,513), South(505,508,509,528), West(502,506,512)
+`;
+
+// ── SYSTEM PROMPTS ────────────────────────────────────────────────────────────
+const SYS_BUILDER = `You are an expert audience segmentation architect. Convert plain-language audience descriptions into precise structured segment definitions.
+
+Return ONLY valid JSON (no markdown fences, no commentary) with this exact schema:
+{
+  "name": "Short descriptive name (4–7 words, Title Case)",
+  "description": "One-sentence summary",
+  "estimated_reach": <integer in thousands — be realistic>,
+  "demographics": {
+    "age_min": <int>,
+    "age_max": <int>,
+    "gender": <["M"] | ["F"] | ["M","F"]>,
+    "ethnicity": <[] for all, or ["Hispanic","Black","White","Asian","Other"]>,
+    "income_min": <annual HH $ or null>,
+    "income_max": <annual HH $ or null>
+  },
+  "behavioral": {
+    "interests": ["relevant IAB-aligned interest categories"],
+    "index_threshold": <int, minimum index vs general pop — 100=average>,
+    "auto_intent": <boolean>,
+    "premium_shopper": <boolean>,
+    "cord_cutter": <boolean>
+  },
+  "geographic": {
+    "dma_codes": [<DMA code ints>],
+    "dma_names": ["DMA city names"],
+    "region": "<region string or null>"
+  },
+  "summary": "2–3 sentence plain-English description of who this audience is, what drives their behavior, and why they matter to advertisers.",
+  "media_affinities": ["3–5 media/content affinities most relevant to this audience"]
+}`;
+
+const SYS_PROFILER = `You are an audience intelligence analyst for a premium media planning platform. Given a segment definition, generate a rich realistic profile with specific index values.
+
+Return ONLY valid JSON with this exact schema:
+{
+  "demographics": [
+    {"trait": "<trait label>", "index": <int 60–300, 100=avg pop>, "segment_pct": <0–100>, "population_pct": <0–100>}
+  ],
+  "interests": [
+    {"category": "<IAB category name>", "index": <int>, "penetration": <0–100>}
+  ],
+  "top_dmas": [
+    {"name": "<DMA name>", "code": <int>, "concentration": <0–100>, "index": <int>}
+  ],
+  "media_consumption": {
+    "linear_tv":  {"index": <int>, "top_daypart": "<daypart>", "top_genre": "<genre>"},
+    "streaming":  {"index": <int>, "top_platforms": ["<p1>","<p2>","<p3>"]},
+    "digital":    {"index": <int>, "top_categories": ["<c1>","<c2>","<c3>"]},
+    "ooh":        {"index": <int>, "top_venues": ["<v1>","<v2>","<v3>"]}
+  },
+  "story": "2–3 sentence narrative describing who this audience truly is, what motivates them, and the most effective way to reach and resonate with them."
+}
+Always provide exactly 5 demographics, 5 interests, 3 DMAs. Make index values realistic and varied.`;
+
+const SYS_EXPLORER = `You are a senior audience intelligence analyst. You have deep knowledge of the following audience segment. Answer every question based on it.
+
+ACTIVE SEGMENT:
+{SEGMENT_JSON}
+
+RESPONSE FORMAT RULES (always follow these exactly):
+- For comparisons / tables: first line = "FORMAT:TABLE", then a GitHub-flavored markdown table
+- For ranked lists: first line = "FORMAT:LIST", then numbered items as "N. Title: explanation"
+- For all other answers: first line = "FORMAT:TEXT", then a concise 2–4 sentence response
+
+Always cite specific index values (e.g. "indexes at 187 vs. the 100 baseline"). Reference DMAs, age groups, and behaviors from the segment. Be specific and analytical.`;
+
+const SYS_BOOLEAN = `You are an expert audience segmentation architect. Given two or more audience segment definitions combined with boolean logic, generate a single new merged segment definition.
+
+Boolean rules:
+- AND  = intersection — audience must satisfy ALL connected segments (smaller, more specific reach)
+- OR   = union        — audience satisfies ANY of the segments (larger, broader reach)
+- NOT  = exclusion    — subtract the second segment's audience from the first (narrows reach)
+
+Return ONLY valid JSON matching this schema exactly (no markdown, no commentary):
+{
+  "name": "Descriptive combined name (e.g. 'Hispanic Auto Intenders excl. Cord-Cutters')",
+  "description": "One-sentence summary of the boolean combination",
+  "estimated_reach": <integer in thousands — adjust realistically for the boolean op>,
+  "demographics": { "age_min": int, "age_max": int, "gender": [...], "ethnicity": [...], "income_min": int|null, "income_max": int|null },
+  "behavioral": { "interests": [...], "index_threshold": int, "auto_intent": bool, "premium_shopper": bool, "cord_cutter": bool },
+  "geographic": { "dma_codes": [...], "dma_names": [...], "region": string|null },
+  "summary": "2–3 sentences explaining who this combined audience is and what the boolean logic achieved.",
+  "media_affinities": [...]
+}`;
+
+// ── API HELPER ────────────────────────────────────────────────────────────────
+async function callClaude(apiKey, system, messages, maxTokens = 2048) {
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true',
+    },
+    body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: maxTokens, system, messages }),
+  });
+  const data = await res.json();
+  if (!res.ok || data.error) throw new Error(data.error?.message || `HTTP ${res.status}`);
+  return data.content[0].text;
+}
+
+// ── SMALL HELPERS ─────────────────────────────────────────────────────────────
+function Spinner({ size = 18 }) {
+  return (
+    <div style={{
+      width: size, height: size, borderRadius: '50%',
+      border: `2px solid rgba(255,104,85,0.25)`,
+      borderTopColor: T.coral,
+      animation: 'spin 0.75s linear infinite',
+      flexShrink: 0,
+    }} />
+  );
+}
+
+function Tag({ children, color = 'teal', style: s = {} }) {
+  const map = {
+    teal:  { bg: T.tealDim,  text: T.teal,  border: T.tealBdr },
+    coral: { bg: T.coralDim, text: T.coral, border: T.coralBdr },
+    gold:  { bg: T.goldDim,  text: T.gold,  border: 'rgba(247,197,159,0.28)' },
+    muted: { bg: 'rgba(255,255,255,0.05)', text: T.muted, border: T.border },
+  };
+  const c = map[color] || map.muted;
+  return (
+    <span style={{
+      background: c.bg, color: c.text, border: `1px solid ${c.border}`,
+      borderRadius: 99, padding: '3px 11px', fontSize: 12, fontWeight: 500, ...s,
+    }}>
+      {children}
+    </span>
+  );
+}
+
+function Btn({ children, onClick, disabled, variant = 'primary', style: s = {} }) {
+  const base = {
+    display: 'inline-flex', alignItems: 'center', gap: 6, padding: '9px 22px',
+    borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: disabled ? 'not-allowed' : 'pointer',
+    border: 'none', transition: 'all 0.15s', ...s,
+  };
+  const variants = {
+    primary:  { background: disabled ? 'rgba(255,104,85,0.35)' : T.coral, color: '#fff' },
+    outline:  { background: 'transparent', border: `1px solid ${T.coral}`, color: T.coral, opacity: disabled ? 0.4 : 1 },
+    ghost:    { background: 'transparent', border: `1px solid ${T.border}`, color: T.muted, opacity: disabled ? 0.4 : 1 },
+    teal:     { background: disabled ? 'rgba(78,205,196,0.3)' : T.teal, color: T.bg },
+  };
+  return (
+    <button onClick={disabled ? undefined : onClick} style={{ ...base, ...variants[variant] }}>
+      {children}
+    </button>
+  );
+}
+
+function Card({ children, style: s = {}, accent }) {
+  return (
+    <div style={{
+      background: T.bgCard,
+      border: `1px solid ${accent ? T.coralBdr : T.border}`,
+      borderRadius: 12,
+      padding: '20px',
+      ...s,
+    }}>
+      {children}
+    </div>
+  );
+}
+
+function SectionLabel({ children }) {
+  return (
+    <div style={{ color: T.muted, fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.1em', fontWeight: 600, marginBottom: 10 }}>
+      {children}
+    </div>
+  );
+}
+
+function ErrorBanner({ msg }) {
+  return (
+    <div style={{
+      background: 'rgba(255,60,60,0.1)', border: '1px solid rgba(255,60,60,0.3)',
+      borderRadius: 8, padding: '11px 16px', color: '#FF8080', fontSize: 13, marginBottom: 16,
+    }}>
+      ⚠ {msg}
+    </div>
+  );
+}
+
+// Strip markdown code fences Claude sometimes wraps JSON in (```json ... ```)
+function parseJSON(raw) {
+  const cleaned = raw.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '').trim();
+  return JSON.parse(cleaned);
+}
+
+// ── EDITABLE FILTER CARD ──────────────────────────────────────────────────────
+function FilterCard({ label, value, icon, onEdit }) {
+  const [editing, setEditing] = useState(false);
+  const [val, setVal] = useState(value);
+  const commit = () => { onEdit && onEdit(val); setEditing(false); };
+  return (
+    <div style={{
+      background: T.bgDeep, border: `1px solid ${T.border}`, borderRadius: 10,
+      padding: '11px 15px', minWidth: 150, flex: '1 1 150px',
+    }}>
+      <div style={{ color: T.muted, fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 5 }}>
+        {icon} {label}
+      </div>
+      {editing ? (
+        <div style={{ display: 'flex', gap: 6 }}>
+          <input
+            value={val}
+            onChange={e => setVal(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') commit(); if (e.key === 'Escape') { setVal(value); setEditing(false); } }}
+            autoFocus
+            style={{
+              flex: 1, background: 'rgba(255,255,255,0.06)', border: `1px solid ${T.coralBdr}`,
+              borderRadius: 5, color: T.text, padding: '3px 7px', fontSize: 13, outline: 'none',
+            }}
+          />
+          <button onClick={commit} style={{ color: T.coral, background: 'none', border: 'none', cursor: 'pointer', fontSize: 15 }}>✓</button>
+        </div>
+      ) : (
+        <div
+          title="Click to edit"
+          onClick={() => setEditing(true)}
+          style={{ color: T.text, fontSize: 13, fontWeight: 500, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}
+        >
+          {value || '—'}
+          <span style={{ color: T.muted, fontSize: 10 }}>✎</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── BUILDER TAB ───────────────────────────────────────────────────────────────
+function BuilderTab({ setActiveSegment, apiKey }) {
+  const [input, setInput] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [refineInput, setRefineInput] = useState('');
+  const [refining, setRefining] = useState(false);
+  const [seg, setSeg] = useState(null);
+  const [copied, setCopied] = useState(false);
+  const [err, setErr] = useState('');
+
+  const generate = async (prompt, isRefine = false) => {
+    if (isRefine) setRefining(true); else setLoading(true);
+    setErr('');
+    try {
+      const msgs = isRefine
+        ? [{ role: 'user', content: `Existing segment:\n${JSON.stringify(seg)}\n\nUser refinement: "${prompt}"\n\nUpdate the segment definition to incorporate this refinement. Return ONLY valid JSON.` }]
+        : [{ role: 'user', content: `Build an audience segment for: "${prompt}"\n\nData context:\n${DATA_CONTEXT}` }];
+      const raw = await callClaude(apiKey, SYS_BUILDER, msgs);
+      const parsed = parseJSON(raw);
+      setSeg(parsed);
+      setActiveSegment({ name: parsed.name, reach: parsed.estimated_reach, definition: parsed });
+      if (isRefine) setRefineInput('');
+    } catch(e) {
+      setErr(e.message || 'Generation failed. Verify your API key.');
+    } finally {
+      setLoading(false);
+      setRefining(false);
+    }
+  };
+
+  const copy = () => {
+    navigator.clipboard.writeText(JSON.stringify(seg, null, 2));
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  const updateSeg = (path, value) => {
+    setSeg(prev => {
+      const next = JSON.parse(JSON.stringify(prev));
+      const parts = path.split('.');
+      let obj = next;
+      for (let i = 0; i < parts.length - 1; i++) obj = obj[parts[i]];
+      obj[parts[parts.length - 1]] = value;
+      setActiveSegment({ name: next.name, reach: next.estimated_reach, definition: next });
+      return next;
+    });
+  };
+
+  const examples = [
+    'Hispanic adults 25–54 in the Southeast who index high on auto intent',
+    'Tech-savvy cord-cutting millennials in major metros interested in gaming and streaming',
+    'High-income homeowners 45–64 in the Northeast with outdoor and finance interests',
+  ];
+
+  return (
+    <div style={{ padding: '32px 40px', maxWidth: 920, margin: '0 auto' }}>
+      {/* Header */}
+      <div style={{ marginBottom: 28 }}>
+        <h2 style={{ color: T.text, fontSize: 22, fontWeight: 700, letterSpacing: '-0.02em' }}>Audience Builder</h2>
+        <p style={{ color: T.muted, fontSize: 14, marginTop: 4 }}>Describe your audience in plain language — AI translates it into a structured segment definition.</p>
+      </div>
+
+      {/* Input */}
+      <textarea
+        value={input}
+        onChange={e => setInput(e.target.value)}
+        placeholder={'Describe your target audience…\ne.g. "Hispanic adults 25–54 in the Southeast who index high on auto intent and are interested in technology"'}
+        style={{
+          width: '100%', background: T.bgCard, border: `1px solid ${T.border}`, borderRadius: 12,
+          color: T.text, padding: '16px 20px', fontSize: 14, minHeight: 100, outline: 'none',
+          transition: 'border-color 0.15s',
+        }}
+        onFocus={e => e.target.style.borderColor = T.coral}
+        onBlur={e => e.target.style.borderColor = T.border}
+      />
+
+      {/* Example chips */}
+      {!seg && (
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10, marginBottom: 4 }}>
+          <span style={{ color: T.muted, fontSize: 12, alignSelf: 'center' }}>Try:</span>
+          {examples.map((ex, i) => (
+            <button key={i} onClick={() => setInput(ex)} style={{
+              background: 'rgba(255,255,255,0.04)', border: `1px solid ${T.border}`, borderRadius: 99,
+              color: T.muted, fontSize: 11, padding: '4px 11px', cursor: 'pointer',
+              transition: 'all 0.15s',
+            }}
+            onMouseEnter={e => { e.currentTarget.style.borderColor = T.coral; e.currentTarget.style.color = T.text; }}
+            onMouseLeave={e => { e.currentTarget.style.borderColor = T.border; e.currentTarget.style.color = T.muted; }}
+            >{ex}</button>
+          ))}
+        </div>
+      )}
+
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 12, marginBottom: 24 }}>
+        <Btn onClick={() => generate(input)} disabled={loading || !input.trim() || !apiKey} variant="primary">
+          {loading ? <><Spinner size={14} />Generating…</> : '→ Build Segment'}
+        </Btn>
+      </div>
+
+      {err && <ErrorBanner msg={err} />}
+
+      {/* Results */}
+      {seg && (
+        <div style={{ animation: 'fadeIn 0.35s ease' }}>
+          {/* Filter Cards */}
+          <SectionLabel>Demographic Filters</SectionLabel>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginBottom: 20 }}>
+            <FilterCard icon="👤" label="Age Range"
+              value={`${seg.demographics.age_min}–${seg.demographics.age_max}`}
+              onEdit={v => { const [a,b] = v.split(/[-–]/); updateSeg('demographics.age_min', parseInt(a)||seg.demographics.age_min); updateSeg('demographics.age_max', parseInt(b)||seg.demographics.age_max); }}
+            />
+            <FilterCard icon="⚥" label="Gender"
+              value={seg.demographics.gender?.join(' & ') || 'All'}
+              onEdit={v => updateSeg('demographics.gender', v.split(/[,& ]+/).filter(Boolean))}
+            />
+            <FilterCard icon="🌎" label="Ethnicity"
+              value={seg.demographics.ethnicity?.length ? seg.demographics.ethnicity.join(', ') : 'All'}
+              onEdit={v => updateSeg('demographics.ethnicity', v.split(',').map(s=>s.trim()).filter(Boolean))}
+            />
+            <FilterCard icon="💰" label="HH Income"
+              value={seg.demographics.income_min ? `$${(seg.demographics.income_min/1000).toFixed(0)}K–$${(seg.demographics.income_max/1000).toFixed(0)}K` : 'All'}
+              onEdit={()=>{}}
+            />
+            <FilterCard icon="📈" label="Index Floor"
+              value={`${seg.behavioral.index_threshold}+`}
+              onEdit={v => updateSeg('behavioral.index_threshold', parseInt(v)||100)}
+            />
+            <FilterCard icon="📍" label="Region"
+              value={seg.geographic.region || seg.geographic.dma_names?.slice(0,2).join(', ') || 'National'}
+              onEdit={v => updateSeg('geographic.region', v)}
+            />
+          </div>
+
+          {/* Behavioral Tags */}
+          <SectionLabel>Behavioral Attributes</SectionLabel>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 20 }}>
+            {seg.behavioral.interests?.map(i => <Tag key={i} color="teal">{i}</Tag>)}
+            {seg.behavioral.auto_intent && <Tag color="coral">🚗 Auto Intent</Tag>}
+            {seg.behavioral.cord_cutter && <Tag color="gold">✂ Cord-Cutter</Tag>}
+            {seg.behavioral.premium_shopper && <Tag color="coral">💎 Premium Shopper</Tag>}
+          </div>
+
+          {/* DMAs */}
+          {seg.geographic.dma_names?.length > 0 && (
+            <>
+              <SectionLabel>Target DMAs</SectionLabel>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 20 }}>
+                {seg.geographic.dma_names.map((d, i) => (
+                  <Tag key={i} color="muted">
+                    📍 {d}{seg.geographic.dma_codes?.[i] ? ` (${seg.geographic.dma_codes[i]})` : ''}
+                  </Tag>
+                ))}
+              </div>
+            </>
+          )}
+
+          {/* Media Affinities */}
+          {seg.media_affinities?.length > 0 && (
+            <>
+              <SectionLabel>Media Affinities</SectionLabel>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 20 }}>
+                {seg.media_affinities.map((m, i) => <Tag key={i} color="gold">▶ {m}</Tag>)}
+              </div>
+            </>
+          )}
+
+          {/* Summary */}
+          <div style={{
+            background: 'linear-gradient(135deg, rgba(255,104,85,0.08), rgba(78,205,196,0.06))',
+            border: `1px solid ${T.coralBdr}`, borderRadius: 12, padding: '18px 22px', marginBottom: 20,
+          }}>
+            <div style={{ color: T.coral, fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 8 }}>
+              Who This Audience Is
+            </div>
+            <p style={{ color: T.text, fontSize: 14, lineHeight: 1.7, marginBottom: 14 }}>{seg.summary}</p>
+            <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap' }}>
+              <div>
+                <span style={{ color: T.muted, fontSize: 12 }}>Est. Reach </span>
+                <span style={{ color: T.coral, fontSize: 17, fontWeight: 800 }}>
+                  {seg.estimated_reach?.toLocaleString()}K
+                </span>
+              </div>
+              <div>
+                <span style={{ color: T.muted, fontSize: 12 }}>Index Floor </span>
+                <span style={{ color: T.teal, fontSize: 17, fontWeight: 800 }}>{seg.behavioral.index_threshold}+</span>
+              </div>
+              <div>
+                <span style={{ color: T.muted, fontSize: 12 }}>Age </span>
+                <span style={{ color: T.text, fontSize: 17, fontWeight: 800 }}>{seg.demographics.age_min}–{seg.demographics.age_max}</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Refine */}
+          <div style={{ marginBottom: 24 }}>
+            <SectionLabel>Refine Segment</SectionLabel>
+            <div style={{ display: 'flex', gap: 10 }}>
+              <input
+                value={refineInput}
+                onChange={e => setRefineInput(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && refineInput.trim() && generate(refineInput, true)}
+                placeholder='e.g. "narrow to only cord-cutters" or "add premium shoppers in Texas"'
+                style={{
+                  flex: 1, background: T.bgCard, border: `1px solid ${T.border}`, borderRadius: 8,
+                  color: T.text, padding: '10px 15px', fontSize: 13, outline: 'none', transition: 'border-color 0.15s',
+                }}
+                onFocus={e => e.target.style.borderColor = T.coral}
+                onBlur={e => e.target.style.borderColor = T.border}
+              />
+              <Btn onClick={() => generate(refineInput, true)} disabled={refining || !refineInput.trim()} variant="outline">
+                {refining ? <Spinner size={13} /> : '↺'} Refine
+              </Btn>
+            </div>
+          </div>
+
+          {/* JSON Output */}
+          <div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+              <SectionLabel>Segment JSON Output</SectionLabel>
+              <button onClick={copy} style={{
+                background: copied ? T.tealDim : 'rgba(255,255,255,0.05)',
+                color: copied ? T.teal : T.muted,
+                border: `1px solid ${copied ? T.tealBdr : T.border}`,
+                borderRadius: 6, padding: '4px 13px', fontSize: 12, cursor: 'pointer', transition: 'all 0.2s',
+              }}>
+                {copied ? '✓ Copied!' : '📋 Copy JSON'}
+              </button>
+            </div>
+            <pre style={{
+              background: '#020912', border: `1px solid ${T.border}`, borderRadius: 10,
+              padding: '16px 20px', color: '#7DD3FC', fontSize: 11.5, overflowX: 'auto',
+              maxHeight: 280, lineHeight: 1.6,
+            }}>
+              {JSON.stringify(seg, null, 2)}
+            </pre>
+          </div>
+        </div>
+      )}
+
+      {!seg && !loading && (
+        <div style={{
+          background: T.bgCard, border: `1px dashed ${T.border}`, borderRadius: 16,
+          padding: '52px 32px', textAlign: 'center',
+        }}>
+          <div style={{ fontSize: 44, marginBottom: 14 }}>🎯</div>
+          <div style={{ color: T.muted, fontSize: 15 }}>Describe your audience above to build a segment</div>
+          <div style={{ color: T.muted, fontSize: 12, marginTop: 6, opacity: 0.6 }}>
+            Segments auto-populate the Profiler and Explorer tabs
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── PROFILER TAB ──────────────────────────────────────────────────────────────
+function ProfilerTab({ segment, apiKey }) {
+  const [manualInput, setManualInput] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [profile, setProfile] = useState(null);
+  const [cmpInput, setCmpInput] = useState('');
+  const [cmpProfile, setCmpProfile] = useState(null);
+  const [cmpLoading, setCmpLoading] = useState(false);
+  const [showCmp, setShowCmp] = useState(false);
+  const [err, setErr] = useState('');
+  const def = segment?.definition;
+
+  const generate = async (defInput, isCmp = false) => {
+    if (isCmp) setCmpLoading(true); else setLoading(true);
+    setErr('');
+    try {
+      const raw = await callClaude(apiKey, SYS_PROFILER, [{
+        role: 'user',
+        content: `Generate a detailed audience profile for:\n${typeof defInput === 'string' ? defInput : JSON.stringify(defInput, null, 2)}\n\nData context:\n${DATA_CONTEXT}`,
+      }]);
+      const parsed = parseJSON(raw);
+      if (isCmp) setCmpProfile(parsed); else setProfile(parsed);
+    } catch(e) {
+      setErr(e.message || 'Profile generation failed');
+    } finally {
+      setLoading(false); setCmpLoading(false);
+    }
+  };
+
+  const indexColor = v => v >= 170 ? T.coral : v >= 130 ? T.coralSoft : v >= 100 ? T.teal : T.muted;
+
+  const DeltaBadge = ({ a, b }) => {
+    const d = a - b;
+    if (Math.abs(d) < 5) return <span style={{ color: T.muted, fontSize: 11 }}>≈</span>;
+    return (
+      <span style={{ color: d > 0 ? T.coral : T.teal, fontSize: 11, fontWeight: 600 }}>
+        {d > 0 ? '▲' : '▼'}{Math.abs(d)}
+      </span>
+    );
+  };
+
+  const ProfilePanel = ({ p, label, other }) => (
+    <div style={{ flex: 1, minWidth: 0 }}>
+      {other && (
+        <div style={{ textAlign: 'center', marginBottom: 16, padding: '8px 0', borderBottom: `1px solid ${T.border}` }}>
+          <span style={{ color: T.coral, fontSize: 13, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em' }}>{label}</span>
+        </div>
+      )}
+
+      {/* Story */}
+      <div style={{
+        background: 'linear-gradient(135deg, rgba(255,104,85,0.09), rgba(78,205,196,0.05))',
+        border: `1px solid ${T.coralBdr}`, borderRadius: 12, padding: '16px 20px', marginBottom: 16,
+      }}>
+        <div style={{ color: T.coral, fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 7 }}>
+          Audience Story
+        </div>
+        <p style={{ color: T.text, fontSize: 13, lineHeight: 1.75 }}>{p.story}</p>
+      </div>
+
+      {/* Demographics chart */}
+      <Card style={{ marginBottom: 16 }}>
+        <div style={{ color: T.text, fontSize: 13, fontWeight: 600, marginBottom: 6 }}>Demographics Index</div>
+        <div style={{ fontSize: 11, color: T.muted, marginBottom: 12 }}>Index vs. general population (dashed line = 100 baseline)</div>
+        <HBarChart data={p.demographics} valueKey="index" labelKey="trait" />
+        {other && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 12, borderTop: `1px solid ${T.border}`, paddingTop: 12 }}>
+            {p.demographics.map((d, i) => (
+              <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12 }}>
+                <span style={{ color: T.muted }}>{d.trait}</span>
+                <DeltaBadge a={d.index} b={other.demographics[i]?.index || 100} />
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+
+      {/* Interests chart */}
+      <Card style={{ marginBottom: 16 }}>
+        <div style={{ color: T.text, fontSize: 13, fontWeight: 600, marginBottom: 6 }}>Interest Categories</div>
+        <div style={{ fontSize: 11, color: T.muted, marginBottom: 12 }}>Audience index vs. general population</div>
+        <HBarChart
+          data={p.interests} valueKey="index" labelKey="category"
+          colorFn={(d, i) => { const op = [1, 0.88, 0.76, 0.64, 0.54][i] || 0.5; return `rgba(78,205,196,${op})`; }}
+        />
+      </Card>
+
+      {/* Top DMAs */}
+      <Card style={{ marginBottom: 16 }}>
+        <div style={{ color: T.text, fontSize: 13, fontWeight: 600, marginBottom: 14 }}>Top DMAs by Concentration</div>
+        {p.top_dmas?.map((dma, i) => (
+          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 13 }}>
+            <div style={{
+              width: 26, height: 26, borderRadius: '50%', background: T.coralDim, border: `1px solid ${T.coralBdr}`,
+              color: T.coral, fontSize: 12, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+            }}>{i + 1}</div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ color: T.text, fontSize: 13, fontWeight: 500 }}>{dma.name}</div>
+              <div style={{ display: 'flex', gap: 14, marginTop: 3 }}>
+                <span style={{ color: T.muted, fontSize: 11 }}>Conc: <span style={{ color: T.teal }}>{dma.concentration}%</span></span>
+                <span style={{ color: T.muted, fontSize: 11 }}>Index: <span style={{ color: indexColor(dma.index) }}>{dma.index}</span></span>
+              </div>
+            </div>
+            <div style={{ width: 56, height: 5, background: 'rgba(255,255,255,0.08)', borderRadius: 99, overflow: 'hidden', flexShrink: 0 }}>
+              <div style={{ height: '100%', width: `${Math.min(dma.concentration, 100)}%`, background: T.coral, borderRadius: 99 }} />
+            </div>
+          </div>
+        ))}
+      </Card>
+
+      {/* Media Consumption */}
+      {p.media_consumption && (
+        <Card>
+          <div style={{ color: T.text, fontSize: 13, fontWeight: 600, marginBottom: 14 }}>Media Consumption</div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+            {[
+              { key: 'linear_tv', icon: '📺', label: 'Linear TV', d: p.media_consumption.linear_tv, sub: d => d?.top_daypart },
+              { key: 'streaming', icon: '▶', label: 'Streaming', d: p.media_consumption.streaming, sub: d => d?.top_platforms?.slice(0,2).join(', ') },
+              { key: 'digital', icon: '💻', label: 'Digital', d: p.media_consumption.digital, sub: d => d?.top_categories?.slice(0,2).join(', ') },
+              { key: 'ooh', icon: '🏙', label: 'OOH', d: p.media_consumption.ooh, sub: d => d?.top_venues?.[0] },
+            ].map(({ key, icon, label, d, sub }) => (
+              <div key={key} style={{
+                background: 'rgba(255,255,255,0.03)', border: `1px solid ${T.border}`,
+                borderRadius: 8, padding: '12px 14px',
+              }}>
+                <div style={{ color: T.muted, fontSize: 11, marginBottom: 6 }}>{icon} {label}</div>
+                <div style={{ color: indexColor(d?.index), fontSize: 20, fontWeight: 800, lineHeight: 1 }}>{d?.index}</div>
+                <div style={{ color: T.muted, fontSize: 10, marginBottom: 6 }}>index</div>
+                {sub(d) && <div style={{ color: T.muted, fontSize: 10.5, lineHeight: 1.4 }}>{sub(d)}</div>}
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+    </div>
+  );
+
+  return (
+    <div style={{ padding: '32px 40px', maxWidth: cmpProfile ? 1300 : 900, margin: '0 auto' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 28 }}>
+        <div>
+          <h2 style={{ color: T.text, fontSize: 22, fontWeight: 700, letterSpacing: '-0.02em' }}>Audience Profiler</h2>
+          <p style={{ color: T.muted, fontSize: 14, marginTop: 4 }}>Generate a rich intelligence brief from any segment definition.</p>
+        </div>
+        {profile && !showCmp && (
+          <Btn variant="outline" style={{ borderColor: T.teal, color: T.teal }} onClick={() => setShowCmp(true)}>
+            ⚖ Compare Audience
+          </Btn>
+        )}
+      </div>
+
+      {/* Input area if no active segment */}
+      {!def && (
+        <div style={{ marginBottom: 20 }}>
+          <textarea
+            value={manualInput}
+            onChange={e => setManualInput(e.target.value)}
+            placeholder="Paste a segment JSON or plain text description to profile…"
+            style={{
+              width: '100%', background: T.bgCard, border: `1px solid ${T.border}`, borderRadius: 12,
+              color: T.text, padding: '16px 20px', fontSize: 14, minHeight: 80, outline: 'none', transition: 'border-color 0.15s',
+            }}
+            onFocus={e => e.target.style.borderColor = T.coral}
+            onBlur={e => e.target.style.borderColor = T.border}
+          />
+        </div>
+      )}
+
+      {/* Active segment notice */}
+      {def && !profile && (
+        <div style={{
+          background: T.bgCard, border: `1px solid ${T.border}`, borderRadius: 10,
+          padding: '12px 16px', marginBottom: 18, display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+        }}>
+          <div style={{ color: T.text, fontSize: 13 }}>
+            Segment ready: <span style={{ color: T.coral, fontWeight: 600 }}>{def.name}</span>
+          </div>
+          <span style={{ color: T.muted, fontSize: 12 }}>~{def.estimated_reach?.toLocaleString()}K reach</span>
+        </div>
+      )}
+
+      <div style={{ display: 'flex', gap: 10, marginBottom: 24 }}>
+        <Btn onClick={() => generate(def || manualInput)} disabled={loading || (!def && !manualInput.trim()) || !apiKey}>
+          {loading ? <><Spinner size={14} />Analyzing…</> : '→ Generate Profile'}
+        </Btn>
+        {profile && (
+          <Btn variant="ghost" onClick={() => generate(def || manualInput)} disabled={loading}>↺ Refresh</Btn>
+        )}
+      </div>
+
+      {/* Compare input */}
+      {showCmp && (
+        <div style={{
+          background: T.bgCard, border: `1px solid ${T.tealBdr}`, borderRadius: 12, padding: 20, marginBottom: 24,
+        }}>
+          <div style={{ color: T.teal, fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 10 }}>
+            Compare Audience
+          </div>
+          <textarea
+            value={cmpInput}
+            onChange={e => setCmpInput(e.target.value)}
+            placeholder="Paste a second segment definition or description to compare side-by-side…"
+            style={{
+              width: '100%', background: T.bgDeep, border: `1px solid ${T.border}`, borderRadius: 8,
+              color: T.text, padding: '12px 16px', fontSize: 13, minHeight: 70, outline: 'none', resize: 'none',
+            }}
+          />
+          <div style={{ display: 'flex', gap: 10, marginTop: 12 }}>
+            <Btn variant="teal" onClick={() => generate(cmpInput, true)} disabled={cmpLoading || !cmpInput.trim()}>
+              {cmpLoading ? 'Loading…' : 'Compare'}
+            </Btn>
+            <Btn variant="ghost" onClick={() => { setShowCmp(false); setCmpProfile(null); }}>Cancel</Btn>
+          </div>
+        </div>
+      )}
+
+      {err && <ErrorBanner msg={err} />}
+
+      {/* Profile output */}
+      {profile && (
+        <div style={{ display: 'flex', gap: 28, animation: 'fadeIn 0.35s ease' }}>
+          <ProfilePanel p={profile} label={def?.name || 'Primary Audience'} other={cmpProfile} />
+          {cmpProfile && (
+            <>
+              <div style={{ width: 1, background: T.border, flexShrink: 0 }} />
+              <ProfilePanel p={cmpProfile} label="Comparison Audience" other={profile} />
+            </>
+          )}
+        </div>
+      )}
+
+      {!profile && !loading && (
+        <div style={{
+          background: T.bgCard, border: `1px dashed ${T.border}`, borderRadius: 16,
+          padding: '52px 32px', textAlign: 'center',
+        }}>
+          <div style={{ fontSize: 44, marginBottom: 14 }}>📊</div>
+          <div style={{ color: T.muted, fontSize: 15 }}>
+            {def
+              ? `Segment "${def.name}" is ready — click Generate Profile`
+              : 'Build a segment in Audience Builder, or paste a definition above'}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── EXPLORER TAB ──────────────────────────────────────────────────────────────
+function ExplorerTab({ segment, apiKey }) {
+  const [msgs, setMsgs] = useState([]);
+  const [input, setInput] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState('');
+  const endRef = useRef(null);
+  const def = segment?.definition;
+
+  useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [msgs]);
+
+  const send = async () => {
+    if (!input.trim() || loading || !apiKey) return;
+    const userMsg = { role: 'user', content: input };
+    const nextMsgs = [...msgs, userMsg];
+    setMsgs(nextMsgs);
+    setInput('');
+    setLoading(true);
+    setErr('');
+    try {
+      const system = SYS_EXPLORER.replace(
+        '{SEGMENT_JSON}',
+        def ? JSON.stringify(def, null, 2) : 'No segment defined. Answer using general audience intelligence best practices.'
+      );
+      const raw = await callClaude(apiKey, system, nextMsgs.map(m => ({ role: m.role, content: m.content })));
+      setMsgs(prev => [...prev, { role: 'assistant', content: raw }]);
+    } catch(e) {
+      setErr(e.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const parseMsg = (content) => {
+    const lines = content.trim().split('\n');
+    const fmt = lines[0].trim();
+    const body = lines.slice(1).join('\n').trim();
+    if (fmt === 'FORMAT:TABLE') {
+      const tLines = body.split('\n').filter(l => l.includes('|'));
+      if (tLines.length >= 2) {
+        const headers = tLines[0].split('|').filter(c => c.trim()).map(c => c.trim());
+        const rows = tLines.slice(2).map(r => r.split('|').filter(c => c.trim()).map(c => c.trim()));
+        return { type: 'table', headers, rows };
+      }
+    }
+    if (fmt === 'FORMAT:LIST') {
+      const items = body.split('\n').filter(l => l.trim()).map(l => l.replace(/^\d+\.\s*/, ''));
+      return { type: 'list', items };
+    }
+    return { type: 'text', text: fmt === 'FORMAT:TEXT' ? body : content };
+  };
+
+  const MsgContent = ({ content, role }) => {
+    if (role === 'user') {
+      return <p style={{ margin: 0, fontSize: 14, color: T.text, lineHeight: 1.6 }}>{content}</p>;
+    }
+    const p = parseMsg(content);
+    if (p.type === 'table') {
+      return (
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ borderCollapse: 'collapse', fontSize: 12.5, width: '100%', minWidth: 380 }}>
+            <thead>
+              <tr>
+                {p.headers.map((h, i) => (
+                  <th key={i} style={{
+                    color: T.coral, fontSize: 10.5, fontWeight: 700, textTransform: 'uppercase',
+                    letterSpacing: '0.07em', padding: '6px 14px', borderBottom: `1px solid ${T.border}`, textAlign: 'left',
+                  }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {p.rows.map((row, i) => (
+                <tr key={i} style={{ background: i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.02)' }}>
+                  {row.map((cell, j) => (
+                    <td key={j} style={{ color: j === 0 ? T.text : T.muted, padding: '8px 14px', borderBottom: `1px solid rgba(255,255,255,0.04)`, fontSize: 13 }}>
+                      {cell}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      );
+    }
+    if (p.type === 'list') {
+      return (
+        <div>
+          {p.items.map((item, i) => {
+            const colonIdx = item.indexOf(':');
+            const title = colonIdx > 0 ? item.slice(0, colonIdx) : null;
+            const desc = colonIdx > 0 ? item.slice(colonIdx + 1) : item;
+            return (
+              <div key={i} style={{ display: 'flex', gap: 10, marginBottom: 10, alignItems: 'flex-start' }}>
+                <div style={{
+                  minWidth: 22, height: 22, borderRadius: '50%', background: T.coralDim, border: `1px solid ${T.coralBdr}`,
+                  color: T.coral, fontSize: 11, fontWeight: 700, display: 'flex', alignItems: 'center',
+                  justifyContent: 'center', flexShrink: 0, marginTop: 1,
+                }}>{i + 1}</div>
+                <div style={{ fontSize: 13.5, color: T.text, lineHeight: 1.55 }}>
+                  {title ? <><span style={{ color: T.coral, fontWeight: 600 }}>{title}:</span>{desc}</> : item}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      );
+    }
+    return <p style={{ margin: 0, fontSize: 13.5, color: T.text, lineHeight: 1.75 }}>{p.text}</p>;
+  };
+
+  const suggested = [
+    'What streaming services does this audience over-index on?',
+    'How does auto ownership compare to the general market?',
+    "What's the best daypart to reach this segment on linear TV?",
+    'Rank the top 5 channels to reach this audience with delta vs. average',
+    'How does this segment differ by income level in terms of media habits?',
+  ];
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', padding: '24px 32px 20px' }}>
+      {/* Header */}
+      <div style={{ marginBottom: 16, flexShrink: 0 }}>
+        <h2 style={{ color: T.text, fontSize: 22, fontWeight: 700, letterSpacing: '-0.02em', marginBottom: 4 }}>Audience Explorer</h2>
+        <p style={{ color: T.muted, fontSize: 14 }}>Ask anything about your audience in natural language.</p>
+      </div>
+
+      {/* Segment context */}
+      {def ? (
+        <div style={{
+          background: 'rgba(255,104,85,0.06)', border: `1px solid ${T.coralBdr}`, borderRadius: 10,
+          padding: '10px 16px', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0,
+        }}>
+          <div style={{ width: 7, height: 7, borderRadius: '50%', background: T.coral, animation: 'glow 2s ease-in-out infinite', flexShrink: 0 }} />
+          <span style={{ color: T.muted, fontSize: 13 }}>
+            Grounded in: <span style={{ color: T.text, fontWeight: 600 }}>{def.name}</span>
+            {' · '}<span style={{ color: T.coral }}>{def.estimated_reach?.toLocaleString()}K reach</span>
+            {' · '}<span style={{ color: T.muted }}>{def.demographics?.age_min}–{def.demographics?.age_max} yrs</span>
+            {def.behavioral?.interests?.length > 0 && (
+              <>{' · '}<span style={{ color: T.teal }}>{def.behavioral.interests.slice(0,3).join(', ')}</span></>
+            )}
+          </span>
+        </div>
+      ) : (
+        <div style={{
+          background: T.goldDim, border: 'rgba(247,197,159,0.25) 1px solid', borderRadius: 10,
+          padding: '11px 16px', marginBottom: 16, color: T.gold, fontSize: 13, flexShrink: 0,
+        }}>
+          💡 No active segment — build one in Audience Builder for grounded analysis, or ask general audience intelligence questions.
+        </div>
+      )}
+
+      {/* Messages */}
+      <div style={{ flex: 1, overflowY: 'auto', marginBottom: 16, paddingRight: 4 }}>
+        {msgs.length === 0 && (
+          <div>
+            <div style={{ color: T.muted, fontSize: 12, marginBottom: 12 }}>Suggested questions:</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+              {suggested.map((q, i) => (
+                <button key={i} onClick={() => setInput(q)} style={{
+                  background: T.bgCard, border: `1px solid ${T.border}`, color: T.muted,
+                  borderRadius: 8, padding: '10px 14px', fontSize: 13, cursor: 'pointer',
+                  textAlign: 'left', transition: 'all 0.15s',
+                }}
+                onMouseEnter={e => { e.currentTarget.style.borderColor = T.coralBdr; e.currentTarget.style.color = T.text; }}
+                onMouseLeave={e => { e.currentTarget.style.borderColor = T.border; e.currentTarget.style.color = T.muted; }}
+                >
+                  <span style={{ marginRight: 8 }}>→</span>{q}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {msgs.map((m, i) => (
+          <div key={i} style={{
+            display: 'flex', gap: 10, marginBottom: 18,
+            justifyContent: m.role === 'user' ? 'flex-end' : 'flex-start',
+            animation: 'fadeIn 0.25s ease',
+          }}>
+            {m.role === 'assistant' && (
+              <div style={{
+                width: 30, height: 30, borderRadius: '50%', flexShrink: 0, marginTop: 2,
+                background: `linear-gradient(135deg, ${T.coral}, ${T.teal})`,
+                display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13,
+              }}>🎯</div>
+            )}
+            <div style={{
+              maxWidth: '78%',
+              background: m.role === 'user' ? T.coralDim : T.bgCard,
+              border: `1px solid ${m.role === 'user' ? T.coralBdr : T.border}`,
+              borderRadius: m.role === 'user' ? '16px 4px 16px 16px' : '4px 16px 16px 16px',
+              padding: '13px 17px',
+            }}>
+              <MsgContent content={m.content} role={m.role} />
+            </div>
+            {m.role === 'user' && (
+              <div style={{
+                width: 30, height: 30, borderRadius: '50%', flexShrink: 0, marginTop: 2,
+                background: T.coralDim, border: `1px solid ${T.coralBdr}`,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                color: T.coral, fontSize: 12, fontWeight: 700,
+              }}>U</div>
+            )}
+          </div>
+        ))}
+
+        {loading && (
+          <div style={{ display: 'flex', gap: 10, marginBottom: 18 }}>
+            <div style={{ width: 30, height: 30, borderRadius: '50%', background: `linear-gradient(135deg, ${T.coral}, ${T.teal})`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, flexShrink: 0 }}>🎯</div>
+            <div style={{ background: T.bgCard, border: `1px solid ${T.border}`, borderRadius: '4px 16px 16px 16px', padding: '13px 17px', display: 'flex', gap: 8, alignItems: 'center' }}>
+              <Spinner size={14} />
+              <span style={{ color: T.muted, fontSize: 13 }}>Analyzing segment data…</span>
+            </div>
+          </div>
+        )}
+
+        {err && <ErrorBanner msg={err} />}
+        <div ref={endRef} />
+      </div>
+
+      {/* Input */}
+      <div style={{ display: 'flex', gap: 10, flexShrink: 0 }}>
+        <input
+          value={input}
+          onChange={e => setInput(e.target.value)}
+          onKeyDown={e => e.key === 'Enter' && send()}
+          disabled={!apiKey || loading}
+          placeholder={apiKey ? 'Ask anything about your audience…' : 'Enter your API key to start'}
+          style={{
+            flex: 1, background: T.bgCard, border: `1px solid ${T.border}`, borderRadius: 12,
+            color: T.text, padding: '13px 18px', fontSize: 14, outline: 'none',
+            transition: 'border-color 0.15s',
+          }}
+          onFocus={e => e.target.style.borderColor = T.coral}
+          onBlur={e => e.target.style.borderColor = T.border}
+        />
+        <button
+          onClick={send}
+          disabled={loading || !input.trim() || !apiKey}
+          style={{
+            background: loading || !input.trim() || !apiKey ? 'rgba(255,104,85,0.3)' : T.coral,
+            color: '#fff', border: 'none', borderRadius: 12,
+            padding: '13px 20px', fontSize: 18, cursor: 'pointer', transition: 'all 0.15s',
+          }}
+        >→</button>
+      </div>
+    </div>
+  );
+}
+
+// ── MAIN APP ──────────────────────────────────────────────────────────────────
+function App() {
+  const [apiKey, setApiKey] = useState('');
+  const [apiInput, setApiInput] = useState('');
+  const [showModal, setShowModal] = useState(true);
+  const [activeTab, setActiveTab] = useState('builder');
+  const [segment, setSegment] = useState(null);
+  const [hoveredTab, setHoveredTab] = useState(null);
+
+  // Saved audiences & boolean logic
+  const [savedSegments, setSavedSegments] = useState([]);
+  const [boolSelected, setBoolSelected] = useState([]);   // [{segId, op}] — op applies BEFORE this item
+  const [boolLoading, setBoolLoading] = useState(false);
+  const [boolErr, setBoolErr] = useState('');
+
+  const handleApiKey = () => {
+    if (apiInput.trim()) { setApiKey(apiInput.trim()); setShowModal(false); }
+  };
+
+  // Wrap setSegment so new segments auto-save to the library
+  const handleSetSegment = (seg) => {
+    setSegment(seg);
+    setSavedSegments(prev => {
+      const idx = prev.findIndex(s => s.savedId === seg.definition?.name);
+      const entry = { ...seg, savedId: seg.definition?.name || seg.name, savedAt: Date.now() };
+      return idx >= 0 ? prev.map((s, i) => i === idx ? entry : s) : [...prev, entry];
+    });
+  };
+
+  const toggleBoolSelect = (savedId) => {
+    setBoolSelected(prev => {
+      const exists = prev.find(x => x.savedId === savedId);
+      if (exists) return prev.filter(x => x.savedId !== savedId);
+      return [...prev, { savedId, op: 'AND' }];
+    });
+    setBoolErr('');
+  };
+
+  const setBoolOp = (savedId, op) => {
+    setBoolSelected(prev => prev.map(x => x.savedId === savedId ? { ...x, op } : x));
+  };
+
+  const applyBoolean = async () => {
+    if (boolSelected.length < 2) { setBoolErr('Select at least 2 audiences'); return; }
+    setBoolLoading(true); setBoolErr('');
+    try {
+      const parts = boolSelected.map((x, i) => {
+        const seg = savedSegments.find(s => s.savedId === x.savedId);
+        const prefix = i === 0 ? 'BASE:' : `${x.op}:`;
+        return `${prefix}\n${JSON.stringify(seg?.definition || seg, null, 2)}`;
+      }).join('\n\n');
+      const raw = await callClaude(apiKey, SYS_BOOLEAN, [{
+        role: 'user',
+        content: `Combine these audiences using the specified boolean operators:\n\n${parts}\n\nData context:\n${DATA_CONTEXT}`,
+      }]);
+      const parsed = parseJSON(raw);
+      handleSetSegment({ name: parsed.name, reach: parsed.estimated_reach, definition: parsed });
+      setActiveTab('profiler');
+    } catch(e) {
+      setBoolErr(e.message || 'Combination failed');
+    } finally {
+      setBoolLoading(false);
+    }
+  };
+
+  const reset = () => { setSegment(null); setActiveTab('builder'); setBoolSelected([]); setBoolErr(''); };
+
+  const tabs = [
+    { id: 'builder',  icon: '🎯', label: 'Audience Builder',  sub: 'Define segments' },
+    { id: 'profiler', icon: '📊', label: 'Audience Profiler', sub: 'Generate profiles' },
+    { id: 'explorer', icon: '💬', label: 'Audience Explorer', sub: 'Chat with data' },
+  ];
+
+  const dataSources = ['Experian', 'DeepSync', 'Freewheel', 'Onspot', 'LoopMe'];
+
+  return (
+    <div style={{ background: T.bg, height: '100vh', display: 'flex', flexDirection: 'column' }}>
+      {/* API Key Modal */}
+      {showModal && (
+        <div style={{
+          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.88)', backdropFilter: 'blur(10px)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999,
+        }}>
+          <div style={{
+            background: T.bgCard, border: `1px solid ${T.border}`, borderRadius: 18,
+            padding: '44px 40px', width: 480, animation: 'fadeIn 0.3s ease',
+          }}>
+            <div style={{ marginBottom: 6 }}>
+              <span style={{ color: T.coral, fontSize: 22, fontWeight: 900, letterSpacing: '-0.03em' }}>LOCI</span>
+              <span style={{ color: T.muted, fontSize: 14, marginLeft: 8 }}>Audience Intelligence Suite</span>
+            </div>
+            <h2 style={{ color: T.text, fontSize: 20, fontWeight: 700, marginBottom: 8, marginTop: 16 }}>
+              Enter your Anthropic API Key
+            </h2>
+            <p style={{ color: T.muted, fontSize: 13.5, lineHeight: 1.65, marginBottom: 26 }}>
+              Power AI-driven audience segmentation, profiling, and exploration. Your key is used in this session only — never stored or transmitted elsewhere.
+            </p>
+            <input
+              type="password"
+              value={apiInput}
+              onChange={e => setApiInput(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && handleApiKey()}
+              placeholder="sk-ant-api03-…"
+              autoFocus
+              style={{
+                width: '100%', background: T.bgDeep, border: `1px solid ${T.border}`, borderRadius: 10,
+                color: T.text, padding: '12px 16px', fontSize: 14, outline: 'none', marginBottom: 14,
+                transition: 'border-color 0.15s',
+              }}
+              onFocus={e => e.target.style.borderColor = T.coral}
+              onBlur={e => e.target.style.borderColor = T.border}
+            />
+            <button
+              onClick={handleApiKey}
+              style={{
+                width: '100%', background: T.coral, color: '#fff', border: 'none',
+                borderRadius: 10, padding: '13px', fontSize: 15, fontWeight: 700, cursor: 'pointer',
+              }}
+            >
+              Enter Suite →
+            </button>
+            <p style={{ color: T.muted, fontSize: 11.5, marginTop: 16, textAlign: 'center', opacity: 0.7 }}>
+              Get your key at console.anthropic.com
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Active Segment Banner */}
+      <div style={{
+        background: segment
+          ? 'linear-gradient(90deg, rgba(255,104,85,0.11), rgba(78,205,196,0.05), transparent)'
+          : 'rgba(255,255,255,0.02)',
+        borderBottom: `1px solid ${segment ? T.coralBdr : T.border}`,
+        height: 46, display: 'flex', alignItems: 'center',
+        justifyContent: 'space-between', padding: '0 20px', flexShrink: 0,
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          {segment ? (
+            <>
+              <div style={{ width: 7, height: 7, borderRadius: '50%', background: T.coral, animation: 'glow 2s ease-in-out infinite' }} />
+              <span style={{ color: T.muted, fontSize: 12.5 }}>Active Segment:</span>
+              <span style={{ color: T.text, fontWeight: 700, fontSize: 13.5 }}>{segment.name}</span>
+              <span style={{ color: T.muted, fontSize: 12 }}>·</span>
+              <span style={{ color: T.coral, fontSize: 12.5, fontWeight: 600 }}>{segment.reach?.toLocaleString()}K est. reach</span>
+            </>
+          ) : (
+            <>
+              <div style={{ width: 7, height: 7, borderRadius: '50%', background: T.muted, opacity: 0.5 }} />
+              <span style={{ color: T.muted, fontSize: 12.5 }}>No active segment</span>
+            </>
+          )}
+        </div>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+          <button onClick={reset} style={{
+            background: 'transparent', border: `1px solid ${T.border}`, color: T.muted,
+            borderRadius: 6, padding: '4px 13px', fontSize: 12, cursor: 'pointer',
+          }}>+ New Segment</button>
+          {apiKey && (
+            <button onClick={() => { setApiKey(''); setApiInput(''); setShowModal(true); }} style={{
+              background: 'transparent', border: 'none', color: T.muted, fontSize: 12, cursor: 'pointer',
+            }}>⚙ API Key</button>
+          )}
+        </div>
+      </div>
+
+      {/* Body */}
+      <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
+        {/* Sidebar */}
+        <div style={{
+          width: 218, background: T.sidebar, borderRight: `1px solid ${T.border}`,
+          display: 'flex', flexDirection: 'column', padding: '22px 10px', flexShrink: 0,
+        }}>
+          {/* Logo */}
+          <div style={{ paddingLeft: 8, marginBottom: 30 }}>
+            <div style={{ color: T.coral, fontSize: 20, fontWeight: 900, letterSpacing: '-0.03em', lineHeight: 1 }}>LOCI</div>
+            <div style={{ color: T.muted, fontSize: 9.5, textTransform: 'uppercase', letterSpacing: '0.18em', marginTop: 3 }}>
+              Audience Intelligence
+            </div>
+          </div>
+
+          {/* Nav */}
+          <nav style={{ flex: 1 }}>
+            <div style={{ color: T.muted, fontSize: 9.5, textTransform: 'uppercase', letterSpacing: '0.14em', paddingLeft: 8, marginBottom: 8 }}>
+              Tools
+            </div>
+            {tabs.map(t => {
+              const active = activeTab === t.id;
+              return (
+                <button
+                  key={t.id}
+                  onClick={() => setActiveTab(t.id)}
+                  onMouseEnter={() => setHoveredTab(t.id)}
+                  onMouseLeave={() => setHoveredTab(null)}
+                  style={{
+                    width: '100%', display: 'flex', alignItems: 'center', gap: 10,
+                    padding: '9px 10px', borderRadius: 8, marginBottom: 3, cursor: 'pointer',
+                    background: active ? T.coralDim : hoveredTab === t.id ? 'rgba(255,255,255,0.04)' : 'transparent',
+                    border: active ? `1px solid ${T.coralBdr}` : '1px solid transparent',
+                    textAlign: 'left', transition: 'all 0.12s',
+                  }}
+                >
+                  <span style={{ fontSize: 16, lineHeight: 1 }}>{t.icon}</span>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ color: active ? T.text : T.muted, fontSize: 12.5, fontWeight: active ? 600 : 400 }}>{t.label}</div>
+                    <div style={{ color: T.muted, fontSize: 10, opacity: 0.6, marginTop: 1 }}>{t.sub}</div>
+                  </div>
+                  {active && <div style={{ width: 3, height: 18, background: T.coral, borderRadius: 99, flexShrink: 0 }} />}
+                </button>
+              );
+            })}
+          </nav>
+
+          {/* ── AUDIENCE LOGIC ─────────────────────────────── */}
+          <div style={{ borderTop: `1px solid ${T.border}`, paddingTop: 14, marginTop: 4, flexShrink: 0 }}>
+            <div style={{ color: T.muted, fontSize: 9.5, textTransform: 'uppercase', letterSpacing: '0.14em', paddingLeft: 8, marginBottom: 6 }}>
+              Audience Logic
+            </div>
+
+            {savedSegments.length === 0 ? (
+              <div style={{ paddingLeft: 8, paddingRight: 8 }}>
+                <p style={{ color: T.muted, fontSize: 11, lineHeight: 1.5, opacity: 0.7 }}>
+                  Build audiences in the Builder to combine them with AND / OR / NOT logic.
+                </p>
+              </div>
+            ) : (
+              <div>
+                {/* Saved segment list */}
+                <div style={{ maxHeight: 220, overflowY: 'auto', marginBottom: 8 }}>
+                  {savedSegments.map((s, i) => {
+                    const isSelected = boolSelected.find(x => x.savedId === s.savedId);
+                    const selIndex = boolSelected.findIndex(x => x.savedId === s.savedId);
+                    const showOp = isSelected && selIndex > 0;
+                    return (
+                      <div key={s.savedId}>
+                        {/* Boolean operator row — appears above the 2nd+ selected item */}
+                        {showOp && (
+                          <div style={{ display: 'flex', justifyContent: 'center', gap: 4, marginBottom: 4 }}>
+                            {['AND','OR','NOT'].map(op => (
+                              <button key={op} onClick={() => setBoolOp(s.savedId, op)} style={{
+                                background: isSelected.op === op ? (op === 'NOT' ? T.coralDim : T.tealDim) : 'rgba(255,255,255,0.04)',
+                                border: `1px solid ${isSelected.op === op ? (op === 'NOT' ? T.coralBdr : T.tealBdr) : T.border}`,
+                                color: isSelected.op === op ? (op === 'NOT' ? T.coral : T.teal) : T.muted,
+                                borderRadius: 4, padding: '2px 7px', fontSize: 9.5, fontWeight: 700,
+                                cursor: 'pointer', letterSpacing: '0.04em',
+                              }}>{op}</button>
+                            ))}
+                          </div>
+                        )}
+                        {/* Segment row */}
+                        <div
+                          onClick={() => toggleBoolSelect(s.savedId)}
+                          style={{
+                            display: 'flex', alignItems: 'center', gap: 7, padding: '7px 8px',
+                            borderRadius: 7, cursor: 'pointer', marginBottom: 3,
+                            background: isSelected ? (isSelected.op === 'NOT' ? T.coralDim : T.tealDim) : 'rgba(255,255,255,0.03)',
+                            border: `1px solid ${isSelected ? (isSelected.op === 'NOT' ? T.coralBdr : T.tealBdr) : T.border}`,
+                            transition: 'all 0.12s',
+                          }}
+                        >
+                          {/* Checkbox */}
+                          <div style={{
+                            width: 14, height: 14, borderRadius: 3, flexShrink: 0,
+                            border: `1.5px solid ${isSelected ? (isSelected.op === 'NOT' ? T.coral : T.teal) : T.muted}`,
+                            background: isSelected ? (isSelected.op === 'NOT' ? T.coral : T.teal) : 'transparent',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          }}>
+                            {isSelected && <span style={{ color: T.bg, fontSize: 9, fontWeight: 900, lineHeight: 1 }}>✓</span>}
+                          </div>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ color: T.text, fontSize: 11, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                              {s.name}
+                            </div>
+                            <div style={{ color: T.muted, fontSize: 9.5, marginTop: 1 }}>
+                              {s.reach?.toLocaleString()}K reach
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Selection summary */}
+                {boolSelected.length >= 2 && (
+                  <div style={{ padding: '6px 8px', marginBottom: 8, background: 'rgba(255,255,255,0.03)', borderRadius: 6 }}>
+                    <div style={{ color: T.muted, fontSize: 10, lineHeight: 1.5 }}>
+                      {boolSelected.map((x, i) => (
+                        <span key={x.savedId}>
+                          {i > 0 && <span style={{ color: x.op === 'NOT' ? T.coral : T.teal, fontWeight: 700 }}> {x.op} </span>}
+                          <span style={{ color: T.text }}>{savedSegments.find(s => s.savedId === x.savedId)?.name}</span>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {boolErr && (
+                  <div style={{ color: '#FF8080', fontSize: 10.5, padding: '0 8px 6px', lineHeight: 1.4 }}>⚠ {boolErr}</div>
+                )}
+
+                <button
+                  onClick={applyBoolean}
+                  disabled={boolSelected.length < 2 || boolLoading || !apiKey}
+                  style={{
+                    width: '100%', padding: '8px', borderRadius: 7, fontSize: 12, fontWeight: 700,
+                    border: 'none', cursor: boolSelected.length < 2 || boolLoading || !apiKey ? 'not-allowed' : 'pointer',
+                    background: boolSelected.length < 2 || boolLoading || !apiKey
+                      ? 'rgba(78,205,196,0.2)' : T.teal,
+                    color: boolSelected.length < 2 || boolLoading || !apiKey ? T.muted : T.bg,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+                    transition: 'all 0.15s',
+                  }}
+                >
+                  {boolLoading ? <><Spinner size={12} />Combining…</> : '⊕ Combine & Profile'}
+                </button>
+              </div>
+            )}
+          </div>
+
+        </div>
+
+        {/* Tab content */}
+        <div style={{ flex: 1, overflowY: 'auto', background: T.bg }}>
+          {activeTab === 'builder'  && <BuilderTab  setActiveSegment={handleSetSegment} apiKey={apiKey} />}
+          {activeTab === 'profiler' && <ProfilerTab segment={segment} apiKey={apiKey} />}
+          {activeTab === 'explorer' && <ExplorerTab segment={segment} apiKey={apiKey} />}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
