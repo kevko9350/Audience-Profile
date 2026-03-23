@@ -170,6 +170,25 @@ RESPONSE FORMAT RULES (always follow these exactly):
 
 Always cite specific index values (e.g. "indexes at 187 vs. the 100 baseline"). Reference DMAs, age groups, and behaviors from the segment. Be specific and analytical.`;
 
+const SYS_BOOLEAN = `You are an expert audience segmentation architect. Given two or more audience segment definitions combined with boolean logic, generate a single new merged segment definition.
+
+Boolean rules:
+- AND  = intersection — audience must satisfy ALL connected segments (smaller, more specific reach)
+- OR   = union        — audience satisfies ANY of the segments (larger, broader reach)
+- NOT  = exclusion    — subtract the second segment's audience from the first (narrows reach)
+
+Return ONLY valid JSON matching this schema exactly (no markdown, no commentary):
+{
+  "name": "Descriptive combined name (e.g. 'Hispanic Auto Intenders excl. Cord-Cutters')",
+  "description": "One-sentence summary of the boolean combination",
+  "estimated_reach": <integer in thousands — adjust realistically for the boolean op>,
+  "demographics": { "age_min": int, "age_max": int, "gender": [...], "ethnicity": [...], "income_min": int|null, "income_max": int|null },
+  "behavioral": { "interests": [...], "index_threshold": int, "auto_intent": bool, "premium_shopper": bool, "cord_cutter": bool },
+  "geographic": { "dma_codes": [...], "dma_names": [...], "region": string|null },
+  "summary": "2–3 sentences explaining who this combined audience is and what the boolean logic achieved.",
+  "media_affinities": [...]
+}`;
+
 // ── API HELPER ────────────────────────────────────────────────────────────────
 async function callClaude(apiKey, system, messages, maxTokens = 2048) {
   const res = await fetch('https://api.anthropic.com/v1/messages', {
@@ -270,6 +289,12 @@ function ErrorBanner({ msg }) {
   );
 }
 
+// Strip markdown code fences Claude sometimes wraps JSON in (```json ... ```)
+function parseJSON(raw) {
+  const cleaned = raw.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '').trim();
+  return JSON.parse(cleaned);
+}
+
 // ── EDITABLE FILTER CARD ──────────────────────────────────────────────────────
 function FilterCard({ label, value, icon, onEdit }) {
   const [editing, setEditing] = useState(false);
@@ -329,7 +354,7 @@ function BuilderTab({ setActiveSegment, apiKey }) {
         ? [{ role: 'user', content: `Existing segment:\n${JSON.stringify(seg)}\n\nUser refinement: "${prompt}"\n\nUpdate the segment definition to incorporate this refinement. Return ONLY valid JSON.` }]
         : [{ role: 'user', content: `Build an audience segment for: "${prompt}"\n\nData context:\n${DATA_CONTEXT}` }];
       const raw = await callClaude(apiKey, SYS_BUILDER, msgs);
-      const parsed = JSON.parse(raw);
+      const parsed = parseJSON(raw);
       setSeg(parsed);
       setActiveSegment({ name: parsed.name, reach: parsed.estimated_reach, definition: parsed });
       if (isRefine) setRefineInput('');
@@ -586,7 +611,7 @@ function ProfilerTab({ segment, apiKey }) {
         role: 'user',
         content: `Generate a detailed audience profile for:\n${typeof defInput === 'string' ? defInput : JSON.stringify(defInput, null, 2)}\n\nData context:\n${DATA_CONTEXT}`,
       }]);
-      const parsed = JSON.parse(raw);
+      const parsed = parseJSON(raw);
       if (isCmp) setCmpProfile(parsed); else setProfile(parsed);
     } catch(e) {
       setErr(e.message || 'Profile generation failed');
@@ -1075,11 +1100,63 @@ function App() {
   const [segment, setSegment] = useState(null);
   const [hoveredTab, setHoveredTab] = useState(null);
 
+  // Saved audiences & boolean logic
+  const [savedSegments, setSavedSegments] = useState([]);
+  const [boolSelected, setBoolSelected] = useState([]);   // [{segId, op}] — op applies BEFORE this item
+  const [boolLoading, setBoolLoading] = useState(false);
+  const [boolErr, setBoolErr] = useState('');
+
   const handleApiKey = () => {
     if (apiInput.trim()) { setApiKey(apiInput.trim()); setShowModal(false); }
   };
 
-  const reset = () => { setSegment(null); setActiveTab('builder'); };
+  // Wrap setSegment so new segments auto-save to the library
+  const handleSetSegment = (seg) => {
+    setSegment(seg);
+    setSavedSegments(prev => {
+      const idx = prev.findIndex(s => s.savedId === seg.definition?.name);
+      const entry = { ...seg, savedId: seg.definition?.name || seg.name, savedAt: Date.now() };
+      return idx >= 0 ? prev.map((s, i) => i === idx ? entry : s) : [...prev, entry];
+    });
+  };
+
+  const toggleBoolSelect = (savedId) => {
+    setBoolSelected(prev => {
+      const exists = prev.find(x => x.savedId === savedId);
+      if (exists) return prev.filter(x => x.savedId !== savedId);
+      return [...prev, { savedId, op: 'AND' }];
+    });
+    setBoolErr('');
+  };
+
+  const setBoolOp = (savedId, op) => {
+    setBoolSelected(prev => prev.map(x => x.savedId === savedId ? { ...x, op } : x));
+  };
+
+  const applyBoolean = async () => {
+    if (boolSelected.length < 2) { setBoolErr('Select at least 2 audiences'); return; }
+    setBoolLoading(true); setBoolErr('');
+    try {
+      const parts = boolSelected.map((x, i) => {
+        const seg = savedSegments.find(s => s.savedId === x.savedId);
+        const prefix = i === 0 ? 'BASE:' : `${x.op}:`;
+        return `${prefix}\n${JSON.stringify(seg?.definition || seg, null, 2)}`;
+      }).join('\n\n');
+      const raw = await callClaude(apiKey, SYS_BOOLEAN, [{
+        role: 'user',
+        content: `Combine these audiences using the specified boolean operators:\n\n${parts}\n\nData context:\n${DATA_CONTEXT}`,
+      }]);
+      const parsed = parseJSON(raw);
+      handleSetSegment({ name: parsed.name, reach: parsed.estimated_reach, definition: parsed });
+      setActiveTab('profiler');
+    } catch(e) {
+      setBoolErr(e.message || 'Combination failed');
+    } finally {
+      setBoolLoading(false);
+    }
+  };
+
+  const reset = () => { setSegment(null); setActiveTab('builder'); setBoolSelected([]); setBoolErr(''); };
 
   const tabs = [
     { id: 'builder',  icon: '🎯', label: 'Audience Builder',  sub: 'Define segments' },
@@ -1227,24 +1304,118 @@ function App() {
             })}
           </nav>
 
-          {/* Data sources */}
-          <div style={{ borderTop: `1px solid ${T.border}`, paddingTop: 14 }}>
-            <div style={{ color: T.muted, fontSize: 9.5, textTransform: 'uppercase', letterSpacing: '0.14em', paddingLeft: 8, marginBottom: 8 }}>
-              Data Partners
+          {/* ── AUDIENCE LOGIC ─────────────────────────────── */}
+          <div style={{ borderTop: `1px solid ${T.border}`, paddingTop: 14, marginTop: 4, flexShrink: 0 }}>
+            <div style={{ color: T.muted, fontSize: 9.5, textTransform: 'uppercase', letterSpacing: '0.14em', paddingLeft: 8, marginBottom: 6 }}>
+              Audience Logic
             </div>
-            {dataSources.map(s => (
-              <div key={s} style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '4px 8px' }}>
-                <div style={{ width: 5, height: 5, borderRadius: '50%', background: T.teal, flexShrink: 0 }} />
-                <span style={{ color: T.muted, fontSize: 11 }}>{s}</span>
-                <span style={{ marginLeft: 'auto', width: 5, height: 5, borderRadius: '50%', background: 'rgba(78,205,196,0.3)' }} />
+
+            {savedSegments.length === 0 ? (
+              <div style={{ paddingLeft: 8, paddingRight: 8 }}>
+                <p style={{ color: T.muted, fontSize: 11, lineHeight: 1.5, opacity: 0.7 }}>
+                  Build audiences in the Builder to combine them with AND / OR / NOT logic.
+                </p>
               </div>
-            ))}
+            ) : (
+              <div>
+                {/* Saved segment list */}
+                <div style={{ maxHeight: 220, overflowY: 'auto', marginBottom: 8 }}>
+                  {savedSegments.map((s, i) => {
+                    const isSelected = boolSelected.find(x => x.savedId === s.savedId);
+                    const selIndex = boolSelected.findIndex(x => x.savedId === s.savedId);
+                    const showOp = isSelected && selIndex > 0;
+                    return (
+                      <div key={s.savedId}>
+                        {/* Boolean operator row — appears above the 2nd+ selected item */}
+                        {showOp && (
+                          <div style={{ display: 'flex', justifyContent: 'center', gap: 4, marginBottom: 4 }}>
+                            {['AND','OR','NOT'].map(op => (
+                              <button key={op} onClick={() => setBoolOp(s.savedId, op)} style={{
+                                background: isSelected.op === op ? (op === 'NOT' ? T.coralDim : T.tealDim) : 'rgba(255,255,255,0.04)',
+                                border: `1px solid ${isSelected.op === op ? (op === 'NOT' ? T.coralBdr : T.tealBdr) : T.border}`,
+                                color: isSelected.op === op ? (op === 'NOT' ? T.coral : T.teal) : T.muted,
+                                borderRadius: 4, padding: '2px 7px', fontSize: 9.5, fontWeight: 700,
+                                cursor: 'pointer', letterSpacing: '0.04em',
+                              }}>{op}</button>
+                            ))}
+                          </div>
+                        )}
+                        {/* Segment row */}
+                        <div
+                          onClick={() => toggleBoolSelect(s.savedId)}
+                          style={{
+                            display: 'flex', alignItems: 'center', gap: 7, padding: '7px 8px',
+                            borderRadius: 7, cursor: 'pointer', marginBottom: 3,
+                            background: isSelected ? (isSelected.op === 'NOT' ? T.coralDim : T.tealDim) : 'rgba(255,255,255,0.03)',
+                            border: `1px solid ${isSelected ? (isSelected.op === 'NOT' ? T.coralBdr : T.tealBdr) : T.border}`,
+                            transition: 'all 0.12s',
+                          }}
+                        >
+                          {/* Checkbox */}
+                          <div style={{
+                            width: 14, height: 14, borderRadius: 3, flexShrink: 0,
+                            border: `1.5px solid ${isSelected ? (isSelected.op === 'NOT' ? T.coral : T.teal) : T.muted}`,
+                            background: isSelected ? (isSelected.op === 'NOT' ? T.coral : T.teal) : 'transparent',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          }}>
+                            {isSelected && <span style={{ color: T.bg, fontSize: 9, fontWeight: 900, lineHeight: 1 }}>✓</span>}
+                          </div>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ color: T.text, fontSize: 11, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                              {s.name}
+                            </div>
+                            <div style={{ color: T.muted, fontSize: 9.5, marginTop: 1 }}>
+                              {s.reach?.toLocaleString()}K reach
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Selection summary */}
+                {boolSelected.length >= 2 && (
+                  <div style={{ padding: '6px 8px', marginBottom: 8, background: 'rgba(255,255,255,0.03)', borderRadius: 6 }}>
+                    <div style={{ color: T.muted, fontSize: 10, lineHeight: 1.5 }}>
+                      {boolSelected.map((x, i) => (
+                        <span key={x.savedId}>
+                          {i > 0 && <span style={{ color: x.op === 'NOT' ? T.coral : T.teal, fontWeight: 700 }}> {x.op} </span>}
+                          <span style={{ color: T.text }}>{savedSegments.find(s => s.savedId === x.savedId)?.name}</span>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {boolErr && (
+                  <div style={{ color: '#FF8080', fontSize: 10.5, padding: '0 8px 6px', lineHeight: 1.4 }}>⚠ {boolErr}</div>
+                )}
+
+                <button
+                  onClick={applyBoolean}
+                  disabled={boolSelected.length < 2 || boolLoading || !apiKey}
+                  style={{
+                    width: '100%', padding: '8px', borderRadius: 7, fontSize: 12, fontWeight: 700,
+                    border: 'none', cursor: boolSelected.length < 2 || boolLoading || !apiKey ? 'not-allowed' : 'pointer',
+                    background: boolSelected.length < 2 || boolLoading || !apiKey
+                      ? 'rgba(78,205,196,0.2)' : T.teal,
+                    color: boolSelected.length < 2 || boolLoading || !apiKey ? T.muted : T.bg,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+                    transition: 'all 0.15s',
+                  }}
+                >
+                  {boolLoading ? <><Spinner size={12} />Combining…</> : '⊕ Combine & Profile'}
+                </button>
+              </div>
+            )}
           </div>
+
         </div>
 
         {/* Tab content */}
         <div style={{ flex: 1, overflowY: 'auto', background: T.bg }}>
-          {activeTab === 'builder'  && <BuilderTab  setActiveSegment={setSegment} apiKey={apiKey} />}
+          {activeTab === 'builder'  && <BuilderTab  setActiveSegment={handleSetSegment} apiKey={apiKey} />}
           {activeTab === 'profiler' && <ProfilerTab segment={segment} apiKey={apiKey} />}
           {activeTab === 'explorer' && <ExplorerTab segment={segment} apiKey={apiKey} />}
         </div>
